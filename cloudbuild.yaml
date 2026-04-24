@@ -28,3 +28,6 @@ steps:
       - --concurrency=25
       - --set-env-vars=NODE_ENV=production
       - --set-secrets=DATABASE_URL=SF_DATABASE_URL:latest,SESSION_SECRET=SF_SESSION_SECRET:latest,SMTP_HOST=SF_SMTP_HOST:latest,SMTP_PORT=SF_SMTP_PORT:latest,SMTP_USER=SF_SMTP_USER:latest,SMTP_PASS=SF_SMTP_PASS:latest,SMTP_FROM_EMAIL=SF_SMTP_FROM_EMAIL:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
