@@ -1,0 +1,39 @@
+Crie uma aplicação web Fullstack focada em "Contas a Receber" (Accounts Receivable) para um desenvolvedor de software.
+
+Stack: Node.js (Express), SQLite (Prisma ORM), React (Vite), Tailwind CSS e Radix UI.
+
+1. Modelagem de Dados Inteligente (Prisma Schema):
+A entidade 'Transaction' deve suportar o conceito de grupos de pagamento:
+- id, description, client (string)
+- category (Enum: "SAAS_SUBSCRIPTION", "PROJECT_INSTALLMENT", "RETAINER_FEE")
+- amount (decimal)
+- dueDate (datetime)
+- status (Enum: "PENDING", "OVERDUE", "PAID")
+- installmentCurrent (int, ex: 1) -> Para saber qual é a parcela.
+- installmentTotal (int, ex: 3) -> Para saber o total de parcelas.
+- groupId (string/uuid) -> Para agrupar todas as parcelas de um mesmo projeto.
+
+2. Funcionalidade Principal: O Criador de Recebíveis (Wizard):
+Ao criar um novo registro, a UI deve perguntar o tipo:
+- Se for "Projeto Parcelado": O usuário insere o Valor Total, Data de Início e Número de Parcelas. O Backend deve gerar automaticamente X registros no banco com datas mensais consecutivas (Lógica de parcelamento).
+- Se for "SaaS/Fixo": O usuário insere o valor mensal e pode escolher "Repetir por X meses" ou "Indeterminado" (gera lançamentos para os próximos 12 meses).
+
+3. Interface de Acompanhamento (Radix UI + UX):
+- Use o componente 'Radix UI Accordion':
+   - A visualização principal não deve ser uma lista plana, mas sim agrupada por Cliente/Projeto.
+   - Ao clicar no Cliente, o Accordion expande e mostra as parcelas (ex: "Site Institucional: [Pago 1/3] [Pendente 2/3] [Futuro 3/3]").
+- Use o componente 'Radix UI Progress':
+   - Ao lado de cada projeto no Accordion, mostre uma barra de progresso visual (ex: se recebeu 2 de 4 parcelas, barra em 50%).
+- Use 'Radix UI Tabs' no topo:
+   - "A Receber (Próximos 30 dias)"
+   - "Em Atraso" (Destaque vermelho crítico)
+   - "Projetos em Andamento" (Visão macro)
+
+4. Dashboard de Previsão:
+- Card "Cashflow Futuro": Soma de tudo o que está "Pendente" para os próximos 3 meses.
+- Lista separada de "Renovações de SaaS": Destaque para contratos mensais que precisam de nota fiscal/cobrança.
+
+5. Estilização:
+- Tema Dark Profissional.
+- Use cores semânticas nas parcelas: Verde (Pago), Amarelo (Vence hoje/amanhã), Cinza (Futuro distante), Vermelho (Atrasado).
+- Formatação BRL (R$) em tudo.
