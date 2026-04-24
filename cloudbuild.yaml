@@ -21,7 +21,7 @@ steps:
       - --network=default
       - --subnet=default
       - --vpc-egress=private-ranges-only
-      - --memory=128Mi
+      - --memory=256Mi
       - --cpu=1
       - --max-instances=1
       - --min-instances=0
