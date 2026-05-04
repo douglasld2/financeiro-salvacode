@@ -30,6 +30,7 @@ interface TransactionAccordionProps {
   transactions: Transaction[];
   allTransactions?: Transaction[];
   usersByGroupId?: Record<string, UserContact>;
+  readOnly?: boolean;
 }
 
 interface ClientGroup {
@@ -116,9 +117,11 @@ function groupTransactions(transactions: Transaction[], allTransactions?: Transa
 function InstallmentRow({
   transaction,
   userContact,
+  readOnly = false,
 }: {
   transaction: Transaction;
   userContact?: UserContact;
+  readOnly?: boolean;
 }) {
   const { toast } = useToast();
   const statusInfo = getStatusBadgeVariant(transaction.status, transaction.dueDate);
@@ -196,7 +199,7 @@ function InstallmentRow({
         <span className="text-sm font-semibold tabular-nums">
           {formatBRL(transaction.amount)}
         </span>
-        {transaction.status === "OVERDUE" && (
+        {!readOnly && transaction.status === "OVERDUE" && (
           <Button
             size="icon"
             variant="ghost"
@@ -223,7 +226,7 @@ function InstallmentRow({
             <MessageCircle className={`h-4 w-4 ${resolvedPhone ? "text-emerald-500" : "text-muted-foreground/30"}`} />
           </Button>
         )}
-        {transaction.status === "OVERDUE" && (
+        {!readOnly && transaction.status === "OVERDUE" && (
           <Button
             size="icon"
             variant="ghost"
@@ -238,7 +241,7 @@ function InstallmentRow({
             <Mail className={`h-4 w-4 ${!resolvedEmail ? "text-muted-foreground/30" : sendEmail.isPending ? "text-muted-foreground animate-pulse" : "text-blue-400"}`} />
           </Button>
         )}
-        {transaction.status !== "PAID" && (
+        {!readOnly && transaction.status !== "PAID" && (
           <Button
             size="sm"
             variant="outline"
@@ -258,6 +261,7 @@ export function TransactionAccordion({
   transactions,
   allTransactions,
   usersByGroupId,
+  readOnly = false,
 }: TransactionAccordionProps) {
   const groups = groupTransactions(transactions, allTransactions);
 
@@ -349,6 +353,7 @@ export function TransactionAccordion({
                           key={txn.id}
                           transaction={txn}
                           userContact={userContact}
+                          readOnly={readOnly}
                         />
                       ))}
                     </div>

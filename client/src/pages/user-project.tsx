@@ -130,7 +130,7 @@ export default function UserProject() {
                   </TabsList>
 
                   <TabsContent value="upcoming">
-                    <TransactionAccordion transactions={next30Days} allTransactions={transactions} />
+                    <TransactionAccordion transactions={next30Days} allTransactions={transactions} readOnly />
                   </TabsContent>
                   <TabsContent value="overdue">
                     {overdue.length === 0 ? (
@@ -138,11 +138,11 @@ export default function UserProject() {
                         <p className="text-sm">Nenhuma parcela em atraso</p>
                       </div>
                     ) : (
-                      <TransactionAccordion transactions={overdue} allTransactions={transactions} />
+                      <TransactionAccordion transactions={overdue} allTransactions={transactions} readOnly />
                     )}
                   </TabsContent>
                   <TabsContent value="projects">
-                    <TransactionAccordion transactions={activeProjects} allTransactions={transactions} />
+                    <TransactionAccordion transactions={activeProjects} allTransactions={transactions} readOnly />
                   </TabsContent>
                 </Tabs>
               </div>

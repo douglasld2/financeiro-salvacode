@@ -44,14 +44,14 @@ const formSchema = z.object({
   description: z.string().min(1, "Descrição é obrigatória"),
   client: z.string().min(1, "Cliente é obrigatório"),
   clientEmail: z.string().email("Email inválido").optional().or(z.literal("")),
-  clientWhatsapp: z.string().optional(),
+  clientWhatsapp: z.string().optional().or(z.literal("")),
   totalAmount: z.string().min(1, "Valor é obrigatório").refine(
     (val) => parseFloat(val) > 0,
     "Valor deve ser positivo"
   ),
   startDate: z.string().min(1, "Data de início é obrigatória"),
-  installments: z.string().default("3"),
-  repeatMonths: z.string().default("12"),
+  installments: z.string().optional(),
+  repeatMonths: z.string().optional(),
   indefinite: z.boolean().default(false),
 });
 
@@ -73,7 +73,13 @@ export function CreateTransactionDialog({
       clientEmail: "",
       clientWhatsapp: "",
       totalAmount: "",
-      startDate: new Date().toISOString().split("T")[0],
+      startDate: (() => {
+        const d = new Date();
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return `${y}-${m}-${day}`;
+      })(),
       installments: "3",
       repeatMonths: "12",
       indefinite: false,
@@ -122,12 +128,10 @@ export function CreateTransactionDialog({
     };
 
     if (category === "PROJECT_INSTALLMENT") {
-      data.installments = parseInt(values.installments);
-    } else {
+      data.installments = Number(values.installments || "3");
+    } else if (category === "SAAS_SUBSCRIPTION" || category === "RETAINER_FEE") {
       data.indefinite = values.indefinite;
-      if (!values.indefinite) {
-        data.repeatMonths = parseInt(values.repeatMonths);
-      }
+      data.repeatMonths = values.indefinite ? 12 : Number(values.repeatMonths || "12");
     }
 
     createMutation.mutate(data);
@@ -155,7 +159,7 @@ export function CreateTransactionDialog({
   ];
 
   const watchAmount = form.watch("totalAmount");
-  const watchInstallments = form.watch("installments");
+  const watchInstallments = form.watch("installments") || "3";
   const watchIndefinite = form.watch("indefinite");
 
   return (
@@ -348,8 +352,8 @@ export function CreateTransactionDialog({
                     <FormItem>
                       <FormLabel>Número de Parcelas</FormLabel>
                       <Select
+                        value={field.value ?? "3"}
                         onValueChange={field.onChange}
-                        defaultValue={field.value}
                       >
                         <FormControl>
                           <SelectTrigger data-testid="select-installments">
@@ -401,8 +405,8 @@ export function CreateTransactionDialog({
                         <FormItem>
                           <FormLabel>Repetir por X meses</FormLabel>
                           <Select
+                            value={field.value ?? "12"}
                             onValueChange={field.onChange}
-                            defaultValue={field.value}
                           >
                             <FormControl>
                               <SelectTrigger data-testid="select-repeat-months">

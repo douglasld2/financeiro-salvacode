@@ -94,3 +94,12 @@ shared/
 - 2026-02-06: Added SMTP email sending for collection messages
 - 2026-02-06: WhatsApp button directs to client's phone number with pre-filled message
 - 2026-04-20: Added role-based auth system (admin + user), login page, admin panel, user project view
+- 2026-05-04: Full CRUD audit and bug fixes:
+  - Server timezone forced to America/Sao_Paulo via `server/tz.ts`; due dates stored at noon local to avoid timezone day-shift
+  - Installment amounts distributed in cents so totals always match (100/3 = 33.34 + 33.33 + 33.33)
+  - Month overflow handled (Jan 31 + 1 month = Feb 28/29)
+  - Overdue detection uses `lt(dueDate, startOfTodayLocal)` so transactions due today are not marked overdue until tomorrow
+  - API errors parsed as JSON in client `apiRequest` for clean Portuguese toast messages
+  - User view (`user-project.tsx`) passes `readOnly` to hide admin-only Pagar/WhatsApp/Email buttons
+  - Self-deletion blocked; deleting the last admin blocked
+  - `createTransactionDialog` startDate defaults to local date components (not UTC ISO string)

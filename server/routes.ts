@@ -13,8 +13,60 @@ const loginLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  skipFailedRequests: false,
   message: { message: "Muitas tentativas de login. Aguarde 15 minutos e tente novamente." },
 });
+
+// Parse "YYYY-MM-DD" as noon LOCAL (server TZ is forced to America/Sao_Paulo).
+// Storing at noon avoids day-shift issues across timezones.
+function parseDueDate(input: string | Date): Date {
+  if (input instanceof Date) {
+    const d = new Date(input);
+    d.setHours(12, 0, 0, 0);
+    return d;
+  }
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(input);
+  if (match) {
+    const [, y, m, d] = match;
+    return new Date(Number(y), Number(m) - 1, Number(d), 12, 0, 0, 0);
+  }
+  const fallback = new Date(input);
+  fallback.setHours(12, 0, 0, 0);
+  return fallback;
+}
+
+// Add months preserving day-of-month; falls back to last day of month if it doesn't exist.
+// Output is at noon local time.
+function addMonthsPreservingDay(base: Date, monthsToAdd: number): Date {
+  const year = base.getFullYear();
+  const month = base.getMonth();
+  const day = base.getDate();
+  const targetMonth = month + monthsToAdd;
+  // Day 0 of next month = last day of this month
+  const lastDayOfTarget = new Date(year, targetMonth + 1, 0).getDate();
+  const finalDay = Math.min(day, lastDayOfTarget);
+  return new Date(year, targetMonth, finalDay, 12, 0, 0, 0);
+}
+
+// Distribute total amount across N installments fairly (in cents),
+// remainder cents go to the first installments. Returns array of "X.XX" strings.
+function splitAmount(total: number, parts: number): string[] {
+  const totalCents = Math.round(total * 100);
+  const baseCents = Math.floor(totalCents / parts);
+  const remainder = totalCents - baseCents * parts;
+  const amounts: string[] = [];
+  for (let i = 0; i < parts; i++) {
+    const cents = baseCents + (i < remainder ? 1 : 0);
+    amounts.push((cents / 100).toFixed(2));
+  }
+  return amounts;
+}
+
+function startOfTodayLocal(): Date {
+  const t = new Date();
+  t.setHours(0, 0, 0, 0);
+  return t;
+}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -22,7 +74,6 @@ export async function registerRoutes(
 ): Promise<Server> {
   await storage.updateOverdueTransactions();
 
-  // ── Auth routes ──────────────────────────────────────────────────
   app.post("/api/auth/login", loginLimiter, async (req, res) => {
     try {
       const { username, password } = req.body;
@@ -40,7 +91,6 @@ export async function registerRoutes(
         return res.status(401).json({ message: "Usuário ou senha incorretos" });
       }
 
-      // Regenerate session ID on login to prevent session fixation attacks
       await new Promise<void>((resolve, reject) => {
         req.session.regenerate((err) => {
           if (err) reject(err);
@@ -79,7 +129,6 @@ export async function registerRoutes(
     return res.json(safeUser);
   });
 
-  // ── User management (admin only) ──────────────────────────────────
   app.get("/api/users", requireAdmin, async (_req, res) => {
     const userList = await storage.getUsers();
     const safe = userList.map(({ password: _pw, ...u }) => u);
@@ -106,23 +155,27 @@ export async function registerRoutes(
       const { password: _pw, ...safe } = created;
       return res.status(201).json(safe);
     } catch (error: any) {
-      return res.status(400).json({ message: error.message || "Erro ao criar usuário" });
+      const message = error?.errors?.[0]?.message || error?.message || "Erro ao criar usuário";
+      return res.status(400).json({ message });
     }
   });
 
   app.patch("/api/users/:id", requireAdmin, async (req, res) => {
     try {
-      const { id } = req.params;
+      const id = req.params.id as string;
       const { name, email, phone, groupIds, password } = req.body;
 
       const updateData: Record<string, unknown> = {};
-      if (name !== undefined) updateData.name = name;
+      if (name !== undefined) updateData.name = name || null;
       if (email !== undefined) updateData.email = email || null;
       if (phone !== undefined) updateData.phone = phone || null;
       if (groupIds !== undefined) updateData.groupIds = Array.isArray(groupIds) && groupIds.length > 0 ? groupIds : null;
-      if (password) updateData.password = await bcrypt.hash(password, 10);
-
-      // Role field is explicitly excluded — cannot be changed via this endpoint
+      if (password) {
+        if (typeof password !== "string" || password.length < 4) {
+          return res.status(400).json({ message: "Senha deve ter ao menos 4 caracteres" });
+        }
+        updateData.password = await bcrypt.hash(password, 10);
+      }
 
       const updated = await storage.updateUser(id, updateData);
       if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
@@ -130,20 +183,17 @@ export async function registerRoutes(
       const { password: _pw, ...safe } = updated;
       return res.json(safe);
     } catch (error: any) {
-      return res.status(400).json({ message: error.message || "Erro ao atualizar usuário" });
+      return res.status(400).json({ message: error?.message || "Erro ao atualizar usuário" });
     }
   });
 
   app.delete("/api/users/:id", requireAdmin, async (req, res) => {
     try {
-      const { id } = req.params;
-
-      // Prevent admin from deleting their own account
+      const id = req.params.id as string;
       if (id === req.session.userId) {
         return res.status(403).json({ message: "Você não pode excluir sua própria conta" });
       }
 
-      // Prevent deleting the last admin account
       const target = await storage.getUserById(id);
       if (!target) return res.status(404).json({ message: "Usuário não encontrado" });
 
@@ -162,13 +212,11 @@ export async function registerRoutes(
     }
   });
 
-  // ── Groups (for user linking) ──────────────────────────────────────
   app.get("/api/groups", requireAdmin, async (_req, res) => {
     const groups = await storage.getDistinctGroups();
     res.json(groups);
   });
 
-  // ── Transactions ──────────────────────────────────────────────────
   app.get("/api/transactions", requireAuth, async (req, res) => {
     try {
       await storage.updateOverdueTransactions();
@@ -192,17 +240,21 @@ export async function registerRoutes(
 
   app.post("/api/transactions", requireAdmin, async (req, res) => {
     try {
-      const parsed = createProjectSchema.parse(req.body);
+      const body = {
+        ...req.body,
+        installments: req.body.installments ?? 1,
+      };
+      const parsed = createProjectSchema.parse(body);
       const groupId = randomUUID();
-      const startDate = new Date(parsed.startDate);
+      const startDate = parseDueDate(parsed.startDate);
+      const todayStart = startOfTodayLocal();
       const txnsToCreate = [];
 
       if (parsed.category === "PROJECT_INSTALLMENT") {
-        const installmentAmount = parsed.totalAmount / parsed.installments;
+        const amounts = splitAmount(parsed.totalAmount, parsed.installments);
 
         for (let i = 0; i < parsed.installments; i++) {
-          const dueDate = new Date(startDate);
-          dueDate.setMonth(dueDate.getMonth() + i);
+          const dueDate = addMonthsPreservingDay(startDate, i);
 
           txnsToCreate.push({
             description: parsed.description,
@@ -210,7 +262,7 @@ export async function registerRoutes(
             clientEmail: parsed.clientEmail || null,
             clientWhatsapp: parsed.clientWhatsapp || null,
             category: parsed.category as "PROJECT_INSTALLMENT",
-            amount: installmentAmount.toFixed(2),
+            amount: amounts[i],
             dueDate,
             status: "PENDING" as const,
             installmentCurrent: i + 1,
@@ -219,12 +271,10 @@ export async function registerRoutes(
           });
         }
       } else {
-        const months =
-          parsed.indefinite || !parsed.repeatMonths ? 12 : parsed.repeatMonths;
+        const months = parsed.indefinite || !parsed.repeatMonths ? 12 : parsed.repeatMonths;
 
         for (let i = 0; i < months; i++) {
-          const dueDate = new Date(startDate);
-          dueDate.setMonth(dueDate.getMonth() + i);
+          const dueDate = addMonthsPreservingDay(startDate, i);
 
           txnsToCreate.push({
             description: parsed.description,
@@ -242,23 +292,23 @@ export async function registerRoutes(
         }
       }
 
-      const now = new Date();
       const finalTxns = txnsToCreate.map((t) => ({
         ...t,
-        status: (t.dueDate < now && t.status === "PENDING" ? "OVERDUE" : t.status) as "PENDING" | "OVERDUE" | "PAID",
+        status: (t.dueDate < todayStart && t.status === "PENDING" ? "OVERDUE" : t.status) as "PENDING" | "OVERDUE" | "PAID",
       }));
 
       const created = await storage.createManyTransactions(finalTxns);
       res.status(201).json(created);
     } catch (error: any) {
       console.error("Error creating transactions:", error);
-      res.status(400).json({ message: error.message || "Failed to create transactions" });
+      const message = error?.errors?.[0]?.message || error?.message || "Failed to create transactions";
+      res.status(400).json({ message });
     }
   });
 
   app.patch("/api/transactions/:id", requireAdmin, async (req, res) => {
     try {
-      const { id } = req.params;
+      const id = req.params.id as string;
       const { status } = req.body;
 
       if (!status || !["PENDING", "OVERDUE", "PAID"].includes(status)) {
@@ -289,7 +339,6 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Transação não encontrada" });
       }
 
-      // Resolve email: prefer linked user's email, fallback to transaction's clientEmail
       const linkedUser = await storage.getUserByGroupId(transaction.groupId);
       const emailTo = linkedUser?.email || transaction.clientEmail;
       const clientName = linkedUser?.name || transaction.client;

@@ -5,6 +5,16 @@ import { randomUUID } from "crypto";
 import { sql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 
+function addMonthsPreservingDay(date: Date, monthsToAdd: number) {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const day = date.getDate();
+  const targetMonth = month + monthsToAdd;
+  const lastDay = new Date(year, targetMonth + 1, 0).getDate();
+  const finalDay = Math.min(day, lastDay);
+  return new Date(year, targetMonth, finalDay, 12, 0, 0, 0);
+}
+
 export async function seedDatabase() {
   const existing = await db.select({ count: sql<number>`count(*)` }).from(transactions);
   const txnCount = Number(existing[0].count);
@@ -39,8 +49,7 @@ export async function seedDatabase() {
   const group1 = randomUUID();
   const group1Txns = [];
   for (let i = 0; i < 4; i++) {
-    const dueDate = new Date(now);
-    dueDate.setMonth(dueDate.getMonth() - 2 + i);
+    const dueDate = addMonthsPreservingDay(now, -2 + i);
     group1Txns.push({
       description: "Site Institucional",
       client: "Empresa ABC Ltda",
@@ -59,8 +68,7 @@ export async function seedDatabase() {
   const group2 = randomUUID();
   const group2Txns = [];
   for (let i = 0; i < 6; i++) {
-    const dueDate = new Date(now);
-    dueDate.setMonth(dueDate.getMonth() - 1 + i);
+    const dueDate = addMonthsPreservingDay(now, -1 + i);
     group2Txns.push({
       description: "App Mobile E-commerce",
       client: "Loja Digital S.A.",
@@ -77,8 +85,7 @@ export async function seedDatabase() {
   const group3 = randomUUID();
   const group3Txns = [];
   for (let i = 0; i < 12; i++) {
-    const dueDate = new Date(now);
-    dueDate.setMonth(dueDate.getMonth() - 3 + i);
+    const dueDate = addMonthsPreservingDay(now, -3 + i);
     group3Txns.push({
       description: "Plano Business",
       client: "Empresa ABC Ltda",
@@ -95,8 +102,7 @@ export async function seedDatabase() {
   const group4 = randomUUID();
   const group4Txns = [];
   for (let i = 0; i < 6; i++) {
-    const dueDate = new Date(now);
-    dueDate.setMonth(dueDate.getMonth() - 1 + i);
+    const dueDate = addMonthsPreservingDay(now, -1 + i);
     group4Txns.push({
       description: "Consultoria Mensal",
       client: "StartUp Tech",
@@ -113,8 +119,7 @@ export async function seedDatabase() {
   const group5 = randomUUID();
   const group5Txns = [];
   for (let i = 0; i < 12; i++) {
-    const dueDate = new Date(now);
-    dueDate.setMonth(dueDate.getMonth() - 2 + i);
+    const dueDate = addMonthsPreservingDay(now, -2 + i);
     group5Txns.push({
       description: "Plano Premium Analytics",
       client: "DataCorp Solutions",
@@ -131,8 +136,7 @@ export async function seedDatabase() {
   const group6 = randomUUID();
   const group6Txns = [];
   for (let i = 0; i < 3; i++) {
-    const dueDate = new Date(now);
-    dueDate.setMonth(dueDate.getMonth() + i);
+    const dueDate = addMonthsPreservingDay(now, i);
     group6Txns.push({
       description: "Landing Page + SEO",
       client: "StartUp Tech",

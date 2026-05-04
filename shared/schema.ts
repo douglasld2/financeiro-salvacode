@@ -57,7 +57,7 @@ export const createProjectSchema = z.object({
   category: z.enum(["SAAS_SUBSCRIPTION", "PROJECT_INSTALLMENT", "RETAINER_FEE"]),
   totalAmount: z.number().positive("Valor deve ser positivo"),
   startDate: z.string().min(1, "Data de início é obrigatória"),
-  installments: z.number().int().min(1).max(60),
+  installments: z.number().int().min(1).max(60).default(1),
   repeatMonths: z.number().int().min(1).max(60).optional(),
   indefinite: z.boolean().optional(),
 });

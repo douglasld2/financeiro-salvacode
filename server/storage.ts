@@ -7,7 +7,7 @@ import {
   users,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, lte, inArray } from "drizzle-orm";
+import { eq, and, lt, inArray } from "drizzle-orm";
 
 export interface IStorage {
   getTransactions(): Promise<Transaction[]>;
@@ -78,14 +78,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateOverdueTransactions(): Promise<void> {
-    const now = new Date();
+    // Mark as overdue only when due date is BEFORE the start of today (local).
+    // A transaction due today is still considered pending until tomorrow.
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
     await db
       .update(transactions)
       .set({ status: "OVERDUE" })
       .where(
         and(
           eq(transactions.status, "PENDING"),
-          lte(transactions.dueDate, now)
+          lt(transactions.dueDate, todayStart)
         )
       );
   }

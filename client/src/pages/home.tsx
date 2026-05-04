@@ -37,7 +37,6 @@ export default function Home() {
     queryKey: ["/api/users"],
   });
 
-  // Build a map of groupId -> user contact for collection buttons
   const usersByGroupId: Record<string, { email: string | null; phone: string | null; name: string | null }> = {};
   for (const u of userList) {
     if (u.role === "user" && u.groupIds) {
@@ -146,8 +145,11 @@ export default function Home() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-2">
-                <Tabs defaultValue="upcoming" className="space-y-4">
+                <Tabs defaultValue="projects" className="space-y-4">
                   <TabsList className="grid w-full grid-cols-3">
+                    <TabsTrigger value="projects" data-testid="tab-projects">
+                      Projetos
+                    </TabsTrigger>
                     <TabsTrigger value="upcoming" data-testid="tab-upcoming">
                       A Receber
                       {next30Days.length > 0 && (
@@ -164,10 +166,15 @@ export default function Home() {
                         </span>
                       )}
                     </TabsTrigger>
-                    <TabsTrigger value="projects" data-testid="tab-projects">
-                      Projetos
-                    </TabsTrigger>
                   </TabsList>
+
+                  <TabsContent value="projects">
+                    <TransactionAccordion
+                      transactions={activeProjects}
+                      allTransactions={transactions}
+                      usersByGroupId={usersByGroupId}
+                    />
+                  </TabsContent>
 
                   <TabsContent value="upcoming">
                     <TransactionAccordion
@@ -189,14 +196,6 @@ export default function Home() {
                         usersByGroupId={usersByGroupId}
                       />
                     )}
-                  </TabsContent>
-
-                  <TabsContent value="projects">
-                    <TransactionAccordion
-                      transactions={activeProjects}
-                      allTransactions={transactions}
-                      usersByGroupId={usersByGroupId}
-                    />
                   </TabsContent>
                 </Tabs>
               </div>

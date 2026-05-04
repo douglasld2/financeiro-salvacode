@@ -22,11 +22,12 @@ export function SaasRenewals({ transactions }: SaasRenewalsProps) {
   }
 
   const nextRenewals: { description: string; client: string; nextDue: Transaction }[] = [];
-  for (const [, txns] of groupedByProject) {
-    const sorted = txns.sort(
-      (a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()
+  groupedByProject.forEach((txns) => {
+    const sorted = [...txns].sort(
+      (a: Transaction, b: Transaction) =>
+        new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()
     );
-    const nextPending = sorted.find((t) => t.status === "PENDING");
+    const nextPending = sorted.find((t: Transaction) => t.status === "PENDING");
     if (nextPending) {
       nextRenewals.push({
         description: nextPending.description,
@@ -34,7 +35,7 @@ export function SaasRenewals({ transactions }: SaasRenewalsProps) {
         nextDue: nextPending,
       });
     }
-  }
+  });
 
   nextRenewals.sort(
     (a, b) =>
