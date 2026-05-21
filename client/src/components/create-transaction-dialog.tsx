@@ -28,23 +28,26 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Layers, RefreshCw, FileText, Mail, MessageCircle } from "lucide-react";
+import { Layers, RefreshCw, FileText, Mail, MessageCircle, Database } from "lucide-react";
 
 interface CreateTransactionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  defaultCategory?: CategoryType;
 }
 
-type CategoryType = "PROJECT_INSTALLMENT" | "SAAS_SUBSCRIPTION" | "RETAINER_FEE";
+type CategoryType = "PROJECT_INSTALLMENT" | "SAAS_SUBSCRIPTION" | "RETAINER_FEE" | "DATABASE_BACKUP";
 
 const formSchema = z.object({
   description: z.string().min(1, "Descrição é obrigatória"),
   client: z.string().min(1, "Cliente é obrigatório"),
   clientEmail: z.string().email("Email inválido").optional().or(z.literal("")),
   clientWhatsapp: z.string().optional().or(z.literal("")),
+  clientCpfCnpj: z.string().optional().or(z.literal("")),
   totalAmount: z.string().min(1, "Valor é obrigatório").refine(
     (val) => parseFloat(val) > 0,
     "Valor deve ser positivo"
@@ -53,6 +56,10 @@ const formSchema = z.object({
   installments: z.string().optional(),
   repeatMonths: z.string().optional(),
   indefinite: z.boolean().default(false),
+  interestRate: z.string().optional(),
+  lateFee: z.string().optional(),
+  earlyDiscount: z.string().optional(),
+  earlyDiscountDays: z.string().optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -60,10 +67,11 @@ type FormValues = z.infer<typeof formSchema>;
 export function CreateTransactionDialog({
   open,
   onOpenChange,
+  defaultCategory,
 }: CreateTransactionDialogProps) {
   const { toast } = useToast();
-  const [step, setStep] = useState<1 | 2>(1);
-  const [category, setCategory] = useState<CategoryType | null>(null);
+  const [step, setStep] = useState<1 | 2>(defaultCategory ? 2 : 1);
+  const [category, setCategory] = useState<CategoryType | null>(defaultCategory ?? null);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -72,6 +80,7 @@ export function CreateTransactionDialog({
       client: "",
       clientEmail: "",
       clientWhatsapp: "",
+      clientCpfCnpj: "",
       totalAmount: "",
       startDate: (() => {
         const d = new Date();
@@ -83,6 +92,10 @@ export function CreateTransactionDialog({
       installments: "3",
       repeatMonths: "12",
       indefinite: false,
+      interestRate: "1.00",
+      lateFee: "2.00",
+      earlyDiscount: "0.00",
+      earlyDiscountDays: "7",
     },
   });
 
@@ -109,8 +122,8 @@ export function CreateTransactionDialog({
   });
 
   function resetForm() {
-    setStep(1);
-    setCategory(null);
+    setStep(defaultCategory ? 2 : 1);
+    setCategory(defaultCategory ?? null);
     form.reset();
   }
 
@@ -122,6 +135,7 @@ export function CreateTransactionDialog({
       client: values.client,
       clientEmail: values.clientEmail || "",
       clientWhatsapp: values.clientWhatsapp || "",
+      clientCpfCnpj: values.clientCpfCnpj || "",
       category,
       totalAmount: parseFloat(values.totalAmount),
       startDate: values.startDate,
@@ -129,9 +143,16 @@ export function CreateTransactionDialog({
 
     if (category === "PROJECT_INSTALLMENT") {
       data.installments = Number(values.installments || "3");
-    } else if (category === "SAAS_SUBSCRIPTION" || category === "RETAINER_FEE") {
+    } else {
       data.indefinite = values.indefinite;
       data.repeatMonths = values.indefinite ? 12 : Number(values.repeatMonths || "12");
+    }
+
+    if (category !== "DATABASE_BACKUP") {
+      data.interestRate = parseFloat(values.interestRate || "1") || 0;
+      data.lateFee = parseFloat(values.lateFee || "2") || 0;
+      data.earlyDiscount = parseFloat(values.earlyDiscount || "0") || 0;
+      data.earlyDiscountDays = Number(values.earlyDiscountDays || "7") || 0;
     }
 
     createMutation.mutate(data);
@@ -156,11 +177,19 @@ export function CreateTransactionDialog({
       desc: "Contrato fixo mensal de serviço",
       icon: FileText,
     },
+    {
+      value: "DATABASE_BACKUP" as CategoryType,
+      label: "Backup de Banco",
+      desc: "Recebimento mensal de empresa terceira",
+      icon: Database,
+    },
   ];
 
   const watchAmount = form.watch("totalAmount");
   const watchInstallments = form.watch("installments") || "3";
   const watchIndefinite = form.watch("indefinite");
+
+  const isBackup = category === "DATABASE_BACKUP";
 
   return (
     <Dialog
@@ -170,7 +199,7 @@ export function CreateTransactionDialog({
         onOpenChange(v);
       }}
     >
-      <DialogContent className="sm:max-w-md" data-testid="dialog-create-transaction">
+      <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto" data-testid="dialog-create-transaction">
         <DialogHeader>
           <DialogTitle data-testid="text-dialog-title">
             {step === 1 ? "Novo Recebível" : "Detalhes do Recebível"}
@@ -221,7 +250,7 @@ export function CreateTransactionDialog({
                     <FormLabel>Descrição</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="Ex: Site Institucional, Plano Pro..."
+                        placeholder={isBackup ? "Ex: Backup Banco Cliente X" : "Ex: Site Institucional, Plano Pro..."}
                         {...field}
                         data-testid="input-description"
                       />
@@ -236,10 +265,10 @@ export function CreateTransactionDialog({
                 name="client"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Cliente</FormLabel>
+                    <FormLabel>{isBackup ? "Cliente / Empresa pagadora" : "Cliente"}</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="Nome do cliente"
+                        placeholder={isBackup ? "Nome do cliente ou empresa que paga" : "Nome do cliente"}
                         {...field}
                         data-testid="input-client"
                       />
@@ -249,51 +278,73 @@ export function CreateTransactionDialog({
                 )}
               />
 
-              <div className="grid grid-cols-2 gap-3">
-                <FormField
-                  control={form.control}
-                  name="clientEmail"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className="flex items-center gap-1.5">
-                        <Mail className="h-3.5 w-3.5" />
-                        Email
-                      </FormLabel>
-                      <FormControl>
-                        <Input
-                          type="email"
-                          placeholder="cliente@email.com"
-                          {...field}
-                          data-testid="input-client-email"
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+              {!isBackup && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField
+                      control={form.control}
+                      name="clientEmail"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="flex items-center gap-1.5">
+                            <Mail className="h-3.5 w-3.5" />
+                            Email
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              type="email"
+                              placeholder="cliente@email.com"
+                              {...field}
+                              data-testid="input-client-email"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
-                <FormField
-                  control={form.control}
-                  name="clientWhatsapp"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className="flex items-center gap-1.5">
-                        <MessageCircle className="h-3.5 w-3.5" />
-                        WhatsApp
-                      </FormLabel>
-                      <FormControl>
-                        <Input
-                          type="tel"
-                          placeholder="5511999999999"
-                          {...field}
-                          data-testid="input-client-whatsapp"
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
+                    <FormField
+                      control={form.control}
+                      name="clientWhatsapp"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="flex items-center gap-1.5">
+                            <MessageCircle className="h-3.5 w-3.5" />
+                            WhatsApp
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              type="tel"
+                              placeholder="5511999999999"
+                              {...field}
+                              data-testid="input-client-whatsapp"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  <FormField
+                    control={form.control}
+                    name="clientCpfCnpj"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>CPF / CNPJ (necessário para PIX via Asaas)</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder="000.000.000-00 ou 00.000.000/0000-00"
+                            {...field}
+                            data-testid="input-client-cpf-cnpj"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </>
+              )}
 
               <FormField
                 control={form.control}
@@ -374,7 +425,7 @@ export function CreateTransactionDialog({
                 />
               )}
 
-              {(category === "SAAS_SUBSCRIPTION" || category === "RETAINER_FEE") && (
+              {category !== "PROJECT_INSTALLMENT" && (
                 <>
                   <FormField
                     control={form.control}
@@ -431,6 +482,95 @@ export function CreateTransactionDialog({
                 </>
               )}
 
+              {!isBackup && (
+                <>
+                  <Separator />
+                  <div className="space-y-3">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                      Juros, multa e desconto
+                    </p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <FormField
+                        control={form.control}
+                        name="interestRate"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Juros (% ao mês)</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                {...field}
+                                data-testid="input-interest-rate"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="lateFee"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Multa (% fixa)</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                {...field}
+                                data-testid="input-late-fee"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="earlyDiscount"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Desconto (%)</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                {...field}
+                                data-testid="input-early-discount"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="earlyDiscountDays"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Se pagar X+ dias antes</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                step="1"
+                                min="0"
+                                {...field}
+                                data-testid="input-early-discount-days"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
               {category === "PROJECT_INSTALLMENT" && watchAmount && watchInstallments && (
                 <div className="rounded-md bg-muted/50 p-3" data-testid="text-installment-preview">
                   <p className="text-xs text-muted-foreground">
@@ -446,15 +586,17 @@ export function CreateTransactionDialog({
               )}
 
               <div className="flex gap-2 pt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setStep(1)}
-                  className="flex-1"
-                  data-testid="button-back"
-                >
-                  Voltar
-                </Button>
+                {!defaultCategory && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setStep(1)}
+                    className="flex-1"
+                    data-testid="button-back"
+                  >
+                    Voltar
+                  </Button>
+                )}
                 <Button
                   type="submit"
                   disabled={createMutation.isPending}

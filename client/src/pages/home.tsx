@@ -10,7 +10,7 @@ import { SaasRenewals } from "@/components/saas-renewals";
 import { CreateTransactionDialog } from "@/components/create-transaction-dialog";
 import { useTheme } from "@/components/theme-provider";
 import { useAuth } from "@/hooks/use-auth";
-import { Plus, Moon, Sun, Receipt, Users, LogOut } from "lucide-react";
+import { Plus, Moon, Sun, Receipt, Users, LogOut, Database } from "lucide-react";
 import type { Transaction } from "@shared/schema";
 
 interface SafeUser {
@@ -25,6 +25,7 @@ interface SafeUser {
 
 export default function Home() {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [backupDialogOpen, setBackupDialogOpen] = useState(false);
   const { theme, toggleTheme } = useTheme();
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
@@ -50,13 +51,16 @@ export default function Home() {
   const thirtyDaysFromNow = new Date(now);
   thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
 
-  const next30Days = transactions.filter((t) => {
+  const billable = transactions.filter((t) => t.category !== "DATABASE_BACKUP");
+  const backups = transactions.filter((t) => t.category === "DATABASE_BACKUP");
+
+  const next30Days = billable.filter((t) => {
     const due = new Date(t.dueDate);
     return t.status === "PENDING" && due >= now && due <= thirtyDaysFromNow;
   });
 
-  const overdue = transactions.filter((t) => t.status === "OVERDUE");
-  const activeProjects = transactions.filter((t) => t.status !== "PAID");
+  const overdue = billable.filter((t) => t.status === "OVERDUE");
+  const activeProjects = billable.filter((t) => t.status !== "PAID");
 
   const handleLogout = async () => {
     await logout();
@@ -141,12 +145,12 @@ export default function Home() {
           </div>
         ) : (
           <>
-            <DashboardCards transactions={transactions} />
+            <DashboardCards transactions={billable} allTransactions={transactions} />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-2">
                 <Tabs defaultValue="projects" className="space-y-4">
-                  <TabsList className="grid w-full grid-cols-3">
+                  <TabsList className="grid w-full grid-cols-4">
                     <TabsTrigger value="projects" data-testid="tab-projects">
                       Projetos
                     </TabsTrigger>
@@ -166,12 +170,21 @@ export default function Home() {
                         </span>
                       )}
                     </TabsTrigger>
+                    <TabsTrigger value="backups" data-testid="tab-backups">
+                      <Database className="h-3.5 w-3.5 mr-1" />
+                      Backups
+                      {backups.length > 0 && (
+                        <span className="ml-1.5 text-[11px] bg-purple-500/15 text-purple-400 px-1.5 py-0.5 rounded-sm">
+                          {backups.length}
+                        </span>
+                      )}
+                    </TabsTrigger>
                   </TabsList>
 
                   <TabsContent value="projects">
                     <TransactionAccordion
                       transactions={activeProjects}
-                      allTransactions={transactions}
+                      allTransactions={billable}
                       usersByGroupId={usersByGroupId}
                     />
                   </TabsContent>
@@ -179,7 +192,7 @@ export default function Home() {
                   <TabsContent value="upcoming">
                     <TransactionAccordion
                       transactions={next30Days}
-                      allTransactions={transactions}
+                      allTransactions={billable}
                       usersByGroupId={usersByGroupId}
                     />
                   </TabsContent>
@@ -192,8 +205,35 @@ export default function Home() {
                     ) : (
                       <TransactionAccordion
                         transactions={overdue}
-                        allTransactions={transactions}
+                        allTransactions={billable}
                         usersByGroupId={usersByGroupId}
+                      />
+                    )}
+                  </TabsContent>
+
+                  <TabsContent value="backups">
+                    <div className="flex justify-end mb-3">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setBackupDialogOpen(true)}
+                        data-testid="button-new-backup"
+                      >
+                        <Plus className="h-4 w-4 mr-1.5" />
+                        Novo Backup
+                      </Button>
+                    </div>
+                    {backups.length === 0 ? (
+                      <div className="text-center py-12 text-muted-foreground">
+                        <Database className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                        <p className="text-sm">Nenhum backup cadastrado</p>
+                        <p className="text-xs mt-1">Clique em "Novo Backup" para começar</p>
+                      </div>
+                    ) : (
+                      <TransactionAccordion
+                        transactions={backups}
+                        allTransactions={backups}
+                        hideCollection
                       />
                     )}
                   </TabsContent>
@@ -201,7 +241,7 @@ export default function Home() {
               </div>
 
               <div>
-                <SaasRenewals transactions={transactions} />
+                <SaasRenewals transactions={billable} />
               </div>
             </div>
           </>
@@ -209,6 +249,11 @@ export default function Home() {
       </main>
 
       <CreateTransactionDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+      <CreateTransactionDialog
+        open={backupDialogOpen}
+        onOpenChange={setBackupDialogOpen}
+        defaultCategory="DATABASE_BACKUP"
+      />
     </div>
   );
 }

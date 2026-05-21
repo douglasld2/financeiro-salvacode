@@ -15,10 +15,8 @@ if (isProd && !process.env.SESSION_SECRET) {
   process.exit(1);
 }
 
-// Trust reverse proxy (Cloud Run, nginx, etc.) so secure cookies work over HTTPS
-if (isProd) {
-  app.set("trust proxy", 1);
-}
+// Trust reverse proxy (Replit, Cloud Run, nginx, etc.)
+app.set("trust proxy", 1);
 
 declare module "http" {
   interface IncomingMessage {

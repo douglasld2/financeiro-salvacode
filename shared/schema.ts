@@ -7,6 +7,7 @@ export const categoryEnum = pgEnum("category", [
   "SAAS_SUBSCRIPTION",
   "PROJECT_INSTALLMENT",
   "RETAINER_FEE",
+  "DATABASE_BACKUP",
 ]);
 
 export const statusEnum = pgEnum("status", [
@@ -23,6 +24,7 @@ export const transactions = pgTable("transactions", {
   client: text("client").notNull(),
   clientEmail: text("client_email"),
   clientWhatsapp: text("client_whatsapp"),
+  clientCpfCnpj: text("client_cpf_cnpj"),
   category: categoryEnum("category").notNull(),
   amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
   dueDate: timestamp("due_date").notNull(),
@@ -30,6 +32,11 @@ export const transactions = pgTable("transactions", {
   installmentCurrent: integer("installment_current").notNull().default(1),
   installmentTotal: integer("installment_total").notNull().default(1),
   groupId: varchar("group_id").notNull(),
+  interestRate: numeric("interest_rate", { precision: 5, scale: 2 }).notNull().default("1.00"),
+  lateFee: numeric("late_fee", { precision: 5, scale: 2 }).notNull().default("2.00"),
+  earlyDiscount: numeric("early_discount", { precision: 5, scale: 2 }).notNull().default("0.00"),
+  earlyDiscountDays: integer("early_discount_days").notNull().default(7),
+  asaasChargeId: text("asaas_charge_id"),
 });
 
 export const users = pgTable("users", {
@@ -54,12 +61,17 @@ export const createProjectSchema = z.object({
   client: z.string().min(1, "Cliente é obrigatório"),
   clientEmail: z.string().email("Email inválido").optional().or(z.literal("")),
   clientWhatsapp: z.string().optional().or(z.literal("")),
-  category: z.enum(["SAAS_SUBSCRIPTION", "PROJECT_INSTALLMENT", "RETAINER_FEE"]),
+  clientCpfCnpj: z.string().optional().or(z.literal("")),
+  category: z.enum(["SAAS_SUBSCRIPTION", "PROJECT_INSTALLMENT", "RETAINER_FEE", "DATABASE_BACKUP"]),
   totalAmount: z.number().positive("Valor deve ser positivo"),
   startDate: z.string().min(1, "Data de início é obrigatória"),
   installments: z.number().int().min(1).max(60).default(1),
   repeatMonths: z.number().int().min(1).max(60).optional(),
   indefinite: z.boolean().optional(),
+  interestRate: z.number().min(0).max(100).optional(),
+  lateFee: z.number().min(0).max(100).optional(),
+  earlyDiscount: z.number().min(0).max(100).optional(),
+  earlyDiscountDays: z.number().int().min(0).max(60).optional(),
 });
 
 export const createUserSchema = z.object({

@@ -46,7 +46,7 @@ shared/
 ```
 
 ## Data Model
-- **Transaction**: id, description, client, clientEmail, clientWhatsapp, category (SAAS_SUBSCRIPTION | PROJECT_INSTALLMENT | RETAINER_FEE), amount, dueDate, status (PENDING | OVERDUE | PAID), installmentCurrent, installmentTotal, groupId
+- **Transaction**: id, description, client, clientEmail, clientWhatsapp, clientCpfCnpj, category (SAAS_SUBSCRIPTION | PROJECT_INSTALLMENT | RETAINER_FEE | DATABASE_BACKUP), amount, dueDate, status (PENDING | OVERDUE | PAID), installmentCurrent, installmentTotal, groupId, interestRate (%/mês), lateFee (% fixa), earlyDiscount (%), earlyDiscountDays (int), asaasChargeId (cache)
 - **User**: id, username, password (hashed), name, email, phone, role (admin | user), groupIds (text[] nullable - links to multiple transaction groups)
 
 ## Authentication
@@ -88,12 +88,31 @@ shared/
 - Uses nodemailer with SMTP (server/email.ts)
 - Requires secrets: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_EMAIL
 
+## Billing Adjustments & Asaas PIX
+- Each transaction stores its own juros/multa/desconto rates (configured per project in the create wizard; defaults: 1% juros/mês, 2% multa, 0% desconto, 7 dias antecipação)
+- `server/billing.ts` calculates adjusted amount on demand: `daily_interest = interestRate/30 * daysLate`; fine = `base * lateFee`; discount applies when paying ≥ earlyDiscountDays before due
+- Collection flow (overdue installments only):
+  1. Admin clicks WhatsApp or Email button
+  2. Frontend calls `POST /api/transactions/:id/collection-preview` which recalculates amount and (if ASAAS_API_KEY set) creates/refreshes an Asaas PIX charge for the adjusted value
+  3. Preview dialog shows breakdown (base, interest, fine, discount, total), PIX copy-paste code, and rendered message
+  4. WhatsApp: opens wa.me with message containing PIX code | Email: server sends via SMTP with same message
+- `server/asaas.ts` wraps Asaas sandbox API (`https://api-sandbox.asaas.com/v3`): findOrCreateCustomer (searches by cpfCnpj then email; falls back to test CPF in sandbox), createPixCharge → returns PIX payload + QR code base64
+- Phone numbers normalized to 10-11 digits (Brazilian DDD format) before sending to Asaas to avoid validation errors
+
+## Backups Section
+- DATABASE_BACKUP category behaves like SAAS recurring billing (monthly, X months or 12 if indefinite)
+- Dedicated "Backups" tab on home page with its own "Novo Backup" button (skips category step in wizard)
+- Backups are excluded from Projetos / A Receber / Em Atraso tabs and from KPI cards (they're paid automatically by a third party — no collection needed)
+- Collection buttons (WhatsApp/Email/Pagar) are hidden on backup rows; "Pagar" becomes "Recebido"
+- API blocks collection-preview and send-collection-email for DATABASE_BACKUP with 400 "Backups não geram cobrança"
+
 ## Recent Changes
 - 2026-02-06: Initial implementation of full MVP
 - 2026-02-06: Added clientEmail and clientWhatsapp fields to transaction schema
 - 2026-02-06: Added SMTP email sending for collection messages
 - 2026-02-06: WhatsApp button directs to client's phone number with pre-filled message
 - 2026-04-20: Added role-based auth system (admin + user), login page, admin panel, user project view
+- 2026-05-21: Backups section + juros/multa/desconto + Asaas PIX integration (see sections above)
 - 2026-05-04: Full CRUD audit and bug fixes:
   - Server timezone forced to America/Sao_Paulo via `server/tz.ts`; due dates stored at noon local to avoid timezone day-shift
   - Installment amounts distributed in cents so totals always match (100/3 = 33.34 + 33.33 + 33.33)

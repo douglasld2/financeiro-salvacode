@@ -28,6 +28,7 @@ export function getCategoryLabel(category: string): string {
     SAAS_SUBSCRIPTION: "Assinatura SaaS",
     PROJECT_INSTALLMENT: "Projeto Parcelado",
     RETAINER_FEE: "Mensalidade / Retainer",
+    DATABASE_BACKUP: "Backup de Banco",
   };
   return labels[category] || category;
 }

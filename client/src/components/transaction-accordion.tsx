@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Accordion,
   AccordionContent,
@@ -8,13 +9,27 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
   formatBRL,
   formatDate,
   getCategoryLabel,
   getStatusBadgeVariant,
-  buildCollectionMessage,
 } from "@/lib/format";
-import { CheckCircle2, Circle, User2, Briefcase, Mail, MessageCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  Circle,
+  User2,
+  Briefcase,
+  Mail,
+  MessageCircle,
+  Copy,
+} from "lucide-react";
 import type { Transaction } from "@shared/schema";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -31,6 +46,7 @@ interface TransactionAccordionProps {
   allTransactions?: Transaction[];
   usersByGroupId?: Record<string, UserContact>;
   readOnly?: boolean;
+  hideCollection?: boolean;
 }
 
 interface ClientGroup {
@@ -74,15 +90,10 @@ function groupTransactions(transactions: Transaction[], allTransactions?: Transa
     let clientPaidAmount = 0;
 
     projectMap.forEach((txns: Transaction[], groupId: string) => {
-      const projectAllTxns = allTxns.filter(t => t.groupId === groupId);
-      const sorted = txns.sort(
-        (a, b) => a.installmentCurrent - b.installmentCurrent
-      );
+      const projectAllTxns = allTxns.filter((t) => t.groupId === groupId);
+      const sorted = txns.sort((a, b) => a.installmentCurrent - b.installmentCurrent);
 
-      const projectTotal = projectAllTxns.reduce(
-        (sum, t) => sum + parseFloat(t.amount),
-        0
-      );
+      const projectTotal = projectAllTxns.reduce((sum, t) => sum + parseFloat(t.amount), 0);
       const projectPaid = projectAllTxns
         .filter((t) => t.status === "PAID")
         .reduce((sum, t) => sum + parseFloat(t.amount), 0);
@@ -114,27 +125,50 @@ function groupTransactions(transactions: Transaction[], allTransactions?: Transa
   return groups.sort((a, b) => a.client.localeCompare(b.client));
 }
 
+interface CollectionPreview {
+  message: string;
+  adjustment: {
+    base: number;
+    adjusted: number;
+    daysDiff: number;
+    interest: number;
+    fine: number;
+    discount: number;
+  };
+  pixCode: string | null;
+  pixQrCodeImage: string | null;
+  invoiceUrl: string | null;
+  pixError: string | null;
+  phone: string | null;
+  email: string | null;
+}
+
 function InstallmentRow({
   transaction,
   userContact,
   readOnly = false,
+  hideCollection = false,
 }: {
   transaction: Transaction;
   userContact?: UserContact;
   readOnly?: boolean;
+  hideCollection?: boolean;
 }) {
   const { toast } = useToast();
   const statusInfo = getStatusBadgeVariant(transaction.status, transaction.dueDate);
+  const isBackup = transaction.category === "DATABASE_BACKUP";
+  const showCollection = !readOnly && !hideCollection && !isBackup;
 
-  // Resolve contact: prefer user account contact, fallback to transaction-level
   const resolvedEmail = userContact?.email || transaction.clientEmail;
   const resolvedPhone = userContact?.phone || transaction.clientWhatsapp;
 
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [preview, setPreview] = useState<CollectionPreview | null>(null);
+  const [previewChannel, setPreviewChannel] = useState<"email" | "whatsapp" | null>(null);
+
   const markPaid = useMutation({
     mutationFn: async () => {
-      await apiRequest("PATCH", `/api/transactions/${transaction.id}`, {
-        status: "PAID",
-      });
+      await apiRequest("PATCH", `/api/transactions/${transaction.id}`, { status: "PAID" });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
@@ -145,17 +179,23 @@ function InstallmentRow({
     },
   });
 
+  const generateCollection = useMutation({
+    mutationFn: async (): Promise<CollectionPreview> => {
+      const res = await apiRequest("POST", `/api/transactions/${transaction.id}/collection-preview`, {});
+      return await res.json();
+    },
+  });
+
   const sendEmail = useMutation({
     mutationFn: async () => {
-      await apiRequest("POST", "/api/send-collection-email", {
-        transactionId: transaction.id,
-      });
+      await apiRequest("POST", "/api/send-collection-email", { transactionId: transaction.id });
     },
     onSuccess: () => {
       toast({
         title: "Email de cobrança enviado",
         description: `Enviado para ${resolvedEmail}`,
       });
+      setPreviewOpen(false);
     },
     onError: (error: Error) => {
       toast({
@@ -165,6 +205,56 @@ function InstallmentRow({
       });
     },
   });
+
+  async function handleWhatsApp() {
+    if (!resolvedPhone) return;
+    setPreviewChannel("whatsapp");
+    setPreviewOpen(true);
+    setPreview(null);
+    try {
+      const data = await generateCollection.mutateAsync();
+      setPreview(data);
+    } catch (e: any) {
+      toast({
+        title: "Erro ao preparar cobrança",
+        description: e.message,
+        variant: "destructive",
+      });
+      setPreviewOpen(false);
+    }
+  }
+
+  async function handleEmail() {
+    if (!resolvedEmail) return;
+    setPreviewChannel("email");
+    setPreviewOpen(true);
+    setPreview(null);
+    try {
+      const data = await generateCollection.mutateAsync();
+      setPreview(data);
+    } catch (e: any) {
+      toast({
+        title: "Erro ao preparar cobrança",
+        description: e.message,
+        variant: "destructive",
+      });
+      setPreviewOpen(false);
+    }
+  }
+
+  function confirmWhatsApp() {
+    if (!preview || !resolvedPhone) return;
+    const phone = resolvedPhone.replace(/\D/g, "");
+    window.open(
+      `https://wa.me/${phone}?text=${encodeURIComponent(preview.message)}`,
+      "_blank"
+    );
+    setPreviewOpen(false);
+  }
+
+  function confirmEmail() {
+    sendEmail.mutate();
+  }
 
   return (
     <div
@@ -199,46 +289,28 @@ function InstallmentRow({
         <span className="text-sm font-semibold tabular-nums">
           {formatBRL(transaction.amount)}
         </span>
-        {!readOnly && transaction.status === "OVERDUE" && (
+        {showCollection && transaction.status === "OVERDUE" && (
           <Button
             size="icon"
             variant="ghost"
-            disabled={!resolvedPhone}
+            disabled={!resolvedPhone || generateCollection.isPending}
             title={!resolvedPhone ? "WhatsApp não cadastrado" : "Enviar WhatsApp"}
-            onClick={() => {
-              if (!resolvedPhone) return;
-              const msg = buildCollectionMessage(
-                userContact?.name || transaction.client,
-                transaction.description,
-                transaction.amount,
-                transaction.dueDate,
-                transaction.installmentCurrent,
-                transaction.installmentTotal
-              );
-              const phone = resolvedPhone.replace(/\D/g, "");
-              window.open(
-                `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`,
-                "_blank"
-              );
-            }}
+            onClick={handleWhatsApp}
             data-testid={`button-whatsapp-${transaction.id}`}
           >
             <MessageCircle className={`h-4 w-4 ${resolvedPhone ? "text-emerald-500" : "text-muted-foreground/30"}`} />
           </Button>
         )}
-        {!readOnly && transaction.status === "OVERDUE" && (
+        {showCollection && transaction.status === "OVERDUE" && (
           <Button
             size="icon"
             variant="ghost"
-            disabled={!resolvedEmail || sendEmail.isPending}
+            disabled={!resolvedEmail || sendEmail.isPending || generateCollection.isPending}
             title={!resolvedEmail ? "Email não cadastrado" : "Enviar Email"}
-            onClick={() => {
-              if (!resolvedEmail) return;
-              sendEmail.mutate();
-            }}
+            onClick={handleEmail}
             data-testid={`button-email-${transaction.id}`}
           >
-            <Mail className={`h-4 w-4 ${!resolvedEmail ? "text-muted-foreground/30" : sendEmail.isPending ? "text-muted-foreground animate-pulse" : "text-blue-400"}`} />
+            <Mail className={`h-4 w-4 ${!resolvedEmail ? "text-muted-foreground/30" : "text-blue-400"}`} />
           </Button>
         )}
         {!readOnly && transaction.status !== "PAID" && (
@@ -249,10 +321,128 @@ function InstallmentRow({
             disabled={markPaid.isPending}
             data-testid={`button-mark-paid-${transaction.id}`}
           >
-            {markPaid.isPending ? "..." : "Pagar"}
+            {markPaid.isPending ? "..." : isBackup ? "Recebido" : "Pagar"}
           </Button>
         )}
       </div>
+
+      <Dialog
+        open={previewOpen}
+        onOpenChange={(v) => {
+          if (!v) {
+            setPreviewOpen(false);
+            setPreview(null);
+            setPreviewChannel(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto" data-testid={`dialog-collection-${transaction.id}`}>
+          <DialogHeader>
+            <DialogTitle>
+              {previewChannel === "whatsapp" ? "Enviar cobrança por WhatsApp" : "Enviar cobrança por Email"}
+            </DialogTitle>
+            <DialogDescription>
+              Valor atualizado com juros, multa ou desconto e código PIX gerado pelo Asaas.
+            </DialogDescription>
+          </DialogHeader>
+
+          {!preview ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              Gerando cobrança e PIX...
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="rounded-md bg-muted/50 p-3 space-y-1.5">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Valor original</span>
+                  <span className="tabular-nums">{formatBRL(preview.adjustment.base)}</span>
+                </div>
+                {preview.adjustment.daysDiff > 0 && (
+                  <>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Dias em atraso</span>
+                      <span className="tabular-nums">{preview.adjustment.daysDiff}</span>
+                    </div>
+                    {preview.adjustment.interest > 0 && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Juros</span>
+                        <span className="tabular-nums text-red-400">+{formatBRL(preview.adjustment.interest)}</span>
+                      </div>
+                    )}
+                    {preview.adjustment.fine > 0 && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Multa</span>
+                        <span className="tabular-nums text-red-400">+{formatBRL(preview.adjustment.fine)}</span>
+                      </div>
+                    )}
+                  </>
+                )}
+                {preview.adjustment.discount > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Desconto antecipação</span>
+                    <span className="tabular-nums text-emerald-400">-{formatBRL(preview.adjustment.discount)}</span>
+                  </div>
+                )}
+                <div className="border-t pt-1.5 flex justify-between font-semibold">
+                  <span>Total a cobrar</span>
+                  <span className="tabular-nums text-primary">{formatBRL(preview.adjustment.adjusted)}</span>
+                </div>
+              </div>
+
+              {preview.pixError && (
+                <div className="rounded-md bg-amber-500/10 border border-amber-500/20 p-3 text-xs text-amber-400">
+                  PIX não gerado: {preview.pixError}
+                </div>
+              )}
+
+              {preview.pixCode && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Código PIX (copia e cola)</p>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        navigator.clipboard.writeText(preview.pixCode!);
+                        toast({ title: "PIX copiado!" });
+                      }}
+                      data-testid="button-copy-pix"
+                    >
+                      <Copy className="h-3.5 w-3.5 mr-1" />
+                      Copiar
+                    </Button>
+                  </div>
+                  <div className="rounded-md bg-muted/50 p-2 text-[11px] font-mono break-all max-h-24 overflow-y-auto" data-testid="text-pix-code">
+                    {preview.pixCode}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Mensagem</p>
+                <div className="rounded-md bg-muted/50 p-3 text-xs whitespace-pre-wrap max-h-48 overflow-y-auto" data-testid="text-collection-message">
+                  {preview.message}
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <Button variant="outline" className="flex-1" onClick={() => setPreviewOpen(false)} data-testid="button-cancel-collection">
+                  Cancelar
+                </Button>
+                {previewChannel === "whatsapp" ? (
+                  <Button className="flex-1" onClick={confirmWhatsApp} data-testid="button-confirm-whatsapp">
+                    Abrir WhatsApp
+                  </Button>
+                ) : (
+                  <Button className="flex-1" onClick={confirmEmail} disabled={sendEmail.isPending} data-testid="button-confirm-email">
+                    {sendEmail.isPending ? "Enviando..." : "Enviar Email"}
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -262,6 +452,7 @@ export function TransactionAccordion({
   allTransactions,
   usersByGroupId,
   readOnly = false,
+  hideCollection = false,
 }: TransactionAccordionProps) {
   const groups = groupTransactions(transactions, allTransactions);
 
@@ -354,6 +545,7 @@ export function TransactionAccordion({
                           transaction={txn}
                           userContact={userContact}
                           readOnly={readOnly}
+                          hideCollection={hideCollection}
                         />
                       ))}
                     </div>

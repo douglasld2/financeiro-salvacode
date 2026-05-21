@@ -36,5 +36,16 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
+    warmup: {
+      clientFiles: [
+        "./src/main.tsx",
+        "./src/App.tsx",
+        "./src/pages/login.tsx",
+        "./src/pages/home.tsx",
+        "./src/hooks/use-auth.tsx",
+        "./src/components/theme-provider.tsx",
+        "./src/lib/queryClient.ts",
+      ],
+    },
   },
 });

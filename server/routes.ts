@@ -7,6 +7,13 @@ import { createProjectSchema, createUserSchema } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { sendCollectionEmail } from "./email";
 import { requireAuth, requireAdmin } from "./auth";
+import { calculateAdjustedAmount, buildCollectionMessage } from "./billing";
+import {
+  findOrCreateCustomer,
+  createPixCharge,
+  getPixForCharge,
+  isAsaasConfigured,
+} from "./asaas";
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -17,8 +24,6 @@ const loginLimiter = rateLimit({
   message: { message: "Muitas tentativas de login. Aguarde 15 minutos e tente novamente." },
 });
 
-// Parse "YYYY-MM-DD" as noon LOCAL (server TZ is forced to America/Sao_Paulo).
-// Storing at noon avoids day-shift issues across timezones.
 function parseDueDate(input: string | Date): Date {
   if (input instanceof Date) {
     const d = new Date(input);
@@ -35,21 +40,16 @@ function parseDueDate(input: string | Date): Date {
   return fallback;
 }
 
-// Add months preserving day-of-month; falls back to last day of month if it doesn't exist.
-// Output is at noon local time.
 function addMonthsPreservingDay(base: Date, monthsToAdd: number): Date {
   const year = base.getFullYear();
   const month = base.getMonth();
   const day = base.getDate();
   const targetMonth = month + monthsToAdd;
-  // Day 0 of next month = last day of this month
   const lastDayOfTarget = new Date(year, targetMonth + 1, 0).getDate();
   const finalDay = Math.min(day, lastDayOfTarget);
   return new Date(year, targetMonth, finalDay, 12, 0, 0, 0);
 }
 
-// Distribute total amount across N installments fairly (in cents),
-// remainder cents go to the first installments. Returns array of "X.XX" strings.
 function splitAmount(total: number, parts: number): string[] {
   const totalCents = Math.round(total * 100);
   const baseCents = Math.floor(totalCents / parts);
@@ -66,6 +66,13 @@ function startOfTodayLocal(): Date {
   const t = new Date();
   t.setHours(0, 0, 0, 0);
   return t;
+}
+
+function formatDateYMD(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
 export async function registerRoutes(
@@ -250,6 +257,13 @@ export async function registerRoutes(
       const todayStart = startOfTodayLocal();
       const txnsToCreate = [];
 
+      const ratesFields = {
+        interestRate: (parsed.interestRate ?? 1).toFixed(2),
+        lateFee: (parsed.lateFee ?? 2).toFixed(2),
+        earlyDiscount: (parsed.earlyDiscount ?? 0).toFixed(2),
+        earlyDiscountDays: parsed.earlyDiscountDays ?? 7,
+      };
+
       if (parsed.category === "PROJECT_INSTALLMENT") {
         const amounts = splitAmount(parsed.totalAmount, parsed.installments);
 
@@ -261,6 +275,7 @@ export async function registerRoutes(
             client: parsed.client,
             clientEmail: parsed.clientEmail || null,
             clientWhatsapp: parsed.clientWhatsapp || null,
+            clientCpfCnpj: parsed.clientCpfCnpj || null,
             category: parsed.category as "PROJECT_INSTALLMENT",
             amount: amounts[i],
             dueDate,
@@ -268,6 +283,7 @@ export async function registerRoutes(
             installmentCurrent: i + 1,
             installmentTotal: parsed.installments,
             groupId,
+            ...ratesFields,
           });
         }
       } else {
@@ -281,13 +297,15 @@ export async function registerRoutes(
             client: parsed.client,
             clientEmail: parsed.clientEmail || null,
             clientWhatsapp: parsed.clientWhatsapp || null,
-            category: parsed.category as "SAAS_SUBSCRIPTION" | "RETAINER_FEE",
+            clientCpfCnpj: parsed.clientCpfCnpj || null,
+            category: parsed.category as "SAAS_SUBSCRIPTION" | "RETAINER_FEE" | "DATABASE_BACKUP",
             amount: parsed.totalAmount.toFixed(2),
             dueDate,
             status: "PENDING" as const,
             installmentCurrent: i + 1,
             installmentTotal: months,
             groupId,
+            ...ratesFields,
           });
         }
       }
@@ -327,6 +345,126 @@ export async function registerRoutes(
     }
   });
 
+  // Shared helper: resolves PIX for a transaction, reusing existing charge when possible
+  const pixLocks = new Map<string, Promise<any>>();
+  async function resolvePixForTransaction(transaction: any) {
+    const existing = pixLocks.get(transaction.id);
+    if (existing) return existing;
+
+    const promise = (async () => {
+      const linkedUser = await storage.getUserByGroupId(transaction.groupId);
+      const clientName = linkedUser?.name || transaction.client;
+      const clientEmail = linkedUser?.email || transaction.clientEmail;
+      const clientPhone = linkedUser?.phone || transaction.clientWhatsapp;
+      const adjustment = calculateAdjustedAmount(transaction);
+
+      let pixCode: string | null = null;
+      let pixQrCodeImage: string | null = null;
+      let pixError: string | null = null;
+      let invoiceUrl: string | null = null;
+
+      if (isAsaasConfigured()) {
+        try {
+          // Reuse cached charge if value still matches (within 1 cent) and not paid
+          if (transaction.asaasChargeId) {
+            const existingCharge = await getPixForCharge(transaction.asaasChargeId);
+            if (
+              existingCharge &&
+              existingCharge.status !== "RECEIVED" &&
+              existingCharge.status !== "CONFIRMED" &&
+              Math.abs(existingCharge.value - adjustment.adjusted) < 0.01
+            ) {
+              pixCode = existingCharge.pixCode;
+              pixQrCodeImage = existingCharge.qrCodeImage;
+              invoiceUrl = existingCharge.invoiceUrl;
+            }
+          }
+
+          if (!pixCode) {
+            const customerId = await findOrCreateCustomer({
+              name: clientName,
+              email: clientEmail,
+              cpfCnpj: transaction.clientCpfCnpj,
+              phone: clientPhone,
+            });
+            const dueForAsaas =
+              adjustment.daysDiff > 0
+                ? formatDateYMD(new Date())
+                : formatDateYMD(new Date(transaction.dueDate));
+            const pix = await createPixCharge({
+              customerId,
+              value: adjustment.adjusted,
+              dueDate: dueForAsaas,
+              description: `${transaction.description} - Parcela ${transaction.installmentCurrent}/${transaction.installmentTotal}`,
+              externalReference: transaction.id,
+            });
+            pixCode = pix.pixCode;
+            pixQrCodeImage = pix.qrCodeImage;
+            invoiceUrl = pix.invoiceUrl;
+            await storage.updateTransactionAsaasChargeId(transaction.id, pix.chargeId);
+          }
+        } catch (e: any) {
+          console.error("Asaas PIX error:", e);
+          pixError = e?.message || "Falha ao gerar PIX";
+        }
+      }
+
+      const message = buildCollectionMessage({
+        clientName,
+        description: transaction.description,
+        installmentCurrent: transaction.installmentCurrent,
+        installmentTotal: transaction.installmentTotal,
+        dueDate: transaction.dueDate,
+        adjustment,
+        pixCode,
+      });
+
+      return {
+        message,
+        adjustment,
+        pixCode,
+        pixQrCodeImage,
+        invoiceUrl,
+        pixError,
+        phone: clientPhone,
+        email: clientEmail,
+        clientName,
+      };
+    })();
+
+    pixLocks.set(transaction.id, promise);
+    try {
+      return await promise;
+    } finally {
+      pixLocks.delete(transaction.id);
+    }
+  }
+
+  // Generates updated charge data (amount with interest/discount + PIX from Asaas)
+  // Does NOT send anything — used by WhatsApp flow which opens wa.me with the returned message.
+  app.post("/api/transactions/:id/collection-preview", requireAdmin, async (req, res) => {
+    try {
+      const id = req.params.id as string;
+      const transaction = await storage.getTransactionById(id);
+      if (!transaction) {
+        return res.status(404).json({ message: "Transação não encontrada" });
+      }
+      if (transaction.category === "DATABASE_BACKUP") {
+        return res.status(400).json({ message: "Backups não geram cobrança" });
+      }
+      if (transaction.status !== "OVERDUE") {
+        return res.status(400).json({ message: "Cobrança disponível apenas para parcelas em atraso" });
+      }
+
+      const result = await resolvePixForTransaction(transaction);
+      const { clientName: _omit, ...response } = result;
+      res.json(response);
+    } catch (error: any) {
+      console.error("Error generating collection preview:", error);
+      res.status(500).json({ message: error?.message || "Falha ao gerar cobrança" });
+    }
+  });
+
   app.post("/api/send-collection-email", requireAdmin, async (req, res) => {
     try {
       const { transactionId } = req.body;
@@ -338,32 +476,27 @@ export async function registerRoutes(
       if (!transaction) {
         return res.status(404).json({ message: "Transação não encontrada" });
       }
+      if (transaction.category === "DATABASE_BACKUP") {
+        return res.status(400).json({ message: "Backups não geram cobrança" });
+      }
+      if (transaction.status !== "OVERDUE") {
+        return res.status(400).json({ message: "Cobrança disponível apenas para parcelas em atraso" });
+      }
 
-      const linkedUser = await storage.getUserByGroupId(transaction.groupId);
-      const emailTo = linkedUser?.email || transaction.clientEmail;
-      const clientName = linkedUser?.name || transaction.client;
-
-      if (!emailTo) {
+      const result = await resolvePixForTransaction(transaction);
+      if (!result.email) {
         return res.status(400).json({ message: "Nenhum email disponível para este cliente" });
       }
 
-      const formattedAmount = new Intl.NumberFormat("pt-BR", {
-        style: "currency",
-        currency: "BRL",
-      }).format(parseFloat(transaction.amount));
-
-      const formattedDate = new Intl.DateTimeFormat("pt-BR", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-      }).format(new Date(transaction.dueDate));
-
       const subject = `Cobrança - ${transaction.description} - Parcela ${transaction.installmentCurrent}/${transaction.installmentTotal}`;
-      const body = `Prezado(a) ${clientName},\n\nIdentificamos que a parcela ${transaction.installmentCurrent}/${transaction.installmentTotal} referente a "${transaction.description}", no valor de ${formattedAmount}, com vencimento em ${formattedDate}, encontra-se em aberto.\n\nSolicitamos gentilmente a regularização do pagamento o mais breve possível.\n\nCaso o pagamento já tenha sido efetuado, por favor desconsidere esta mensagem.\n\nAtenciosamente.`;
+      await sendCollectionEmail(result.email, subject, result.message);
 
-      await sendCollectionEmail(emailTo, subject, body);
-
-      res.json({ message: "Email de cobrança enviado com sucesso" });
+      res.json({
+        message: "Email de cobrança enviado com sucesso",
+        adjustment: result.adjustment,
+        pixIncluded: Boolean(result.pixCode),
+        pixError: result.pixError,
+      });
     } catch (error: any) {
       console.error("Error sending collection email:", error);
       res.status(500).json({ message: error.message || "Falha ao enviar email" });
