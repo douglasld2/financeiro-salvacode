@@ -35,6 +35,16 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
+      window.onerror = function(msg, src, line, col, err) {
+        var splash = document.getElementById('splash');
+        if (splash) {
+          splash.innerHTML = '<p style="color:#f87171;font-family:sans-serif;font-size:13px;padding:20px;text-align:center">Erro JS: ' + msg + '<br><small>' + (src||'') + ':' + line + '</small></p>';
+        }
+        console.error('APP ERROR:', msg, src, line, err);
+      };
+      window.addEventListener('unhandledrejection', function(e) {
+        console.error('UNHANDLED REJECTION:', e.reason);
+      });
       document.addEventListener('DOMContentLoaded', function() {
         var observer = new MutationObserver(function() {
           var root = document.getElementById('root');
