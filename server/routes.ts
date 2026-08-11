@@ -14,6 +14,7 @@ import {
   getPixForCharge,
   isAsaasConfigured,
 } from "./asaas";
+import { sendWhatsAppText, isWhatsAppConfigured } from "./whatsapp";
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -73,6 +74,32 @@ function formatDateYMD(date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+function normalizeDocument(value: unknown): string {
+  return String(value ?? "").replace(/\D/g, "");
+}
+
+function parseMonthYear(value: unknown): { month: number; year: number } | null {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return { month: value.getMonth() + 1, year: value.getFullYear() };
+  }
+
+  const text = String(value ?? "").trim();
+  const match = /^(\d{1,2})\s*[\/-]\s*(\d{4})$/.exec(text);
+  if (match) {
+    const month = Number(match[1]);
+    const year = Number(match[2]);
+    if (month < 1 || month > 12 || year < 2000 || year > 2100) return null;
+    return { month, year };
+  }
+
+  // Date cells are serialized as ISO strings when the browser posts the preview rows.
+  const isoDate = new Date(text);
+  if (!Number.isNaN(isoDate.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(text)) {
+    return { month: isoDate.getUTCMonth() + 1, year: isoDate.getUTCFullYear() };
+  }
+  return null;
 }
 
 export async function registerRoutes(
@@ -275,7 +302,7 @@ export async function registerRoutes(
             client: parsed.client,
             clientEmail: parsed.clientEmail || null,
             clientWhatsapp: parsed.clientWhatsapp || null,
-            clientCpfCnpj: parsed.clientCpfCnpj || null,
+            clientCpfCnpj: parsed.clientCpfCnpj?.trim() || null,
             category: parsed.category as "PROJECT_INSTALLMENT",
             amount: amounts[i],
             dueDate,
@@ -297,7 +324,7 @@ export async function registerRoutes(
             client: parsed.client,
             clientEmail: parsed.clientEmail || null,
             clientWhatsapp: parsed.clientWhatsapp || null,
-            clientCpfCnpj: parsed.clientCpfCnpj || null,
+            clientCpfCnpj: parsed.clientCpfCnpj?.trim() || null,
             category: parsed.category as "SAAS_SUBSCRIPTION" | "RETAINER_FEE" | "DATABASE_BACKUP",
             amount: parsed.totalAmount.toFixed(2),
             dueDate,
@@ -327,13 +354,73 @@ export async function registerRoutes(
   app.patch("/api/transactions/:id", requireAdmin, async (req, res) => {
     try {
       const id = req.params.id as string;
-      const { status } = req.body;
-
-      if (!status || !["PENDING", "OVERDUE", "PAID"].includes(status)) {
-        return res.status(400).json({ message: "Status inválido" });
+      const current = await storage.getTransactionById(id);
+      if (!current) {
+        return res.status(404).json({ message: "Transação não encontrada" });
       }
 
-      const updated = await storage.updateTransactionStatus(id, status);
+      const { updateClientGroup, ...body } = req.body ?? {};
+      const updateData: Record<string, unknown> = {};
+      const clientData: Record<string, unknown> = {};
+
+      if (body.description !== undefined) {
+        if (typeof body.description !== "string" || !body.description.trim()) {
+          return res.status(400).json({ message: "Descrição é obrigatória" });
+        }
+        clientData.description = body.description.trim();
+      }
+      if (body.client !== undefined) {
+        if (typeof body.client !== "string" || !body.client.trim()) {
+          return res.status(400).json({ message: "Cliente é obrigatório" });
+        }
+        clientData.client = body.client.trim();
+      }
+      for (const field of ["clientEmail", "clientWhatsapp", "clientCpfCnpj"] as const) {
+        if (body[field] !== undefined) {
+          clientData[field] = typeof body[field] === "string" && body[field].trim()
+            ? body[field].trim()
+            : null;
+        }
+      }
+
+      if (body.amount !== undefined) {
+        const amount = Number(body.amount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return res.status(400).json({ message: "Valor deve ser positivo" });
+        }
+        updateData.amount = amount.toFixed(2);
+      }
+      if (body.dueDate !== undefined) {
+        const dueDate = parseDueDate(body.dueDate);
+        if (Number.isNaN(dueDate.getTime())) {
+          return res.status(400).json({ message: "Data de vencimento inválida" });
+        }
+        updateData.dueDate = dueDate;
+      }
+      if (body.status !== undefined) {
+        if (!["PENDING", "OVERDUE", "PAID"].includes(body.status)) {
+          return res.status(400).json({ message: "Status inválido" });
+        }
+        updateData.status = body.status;
+      }
+
+      if (Object.keys(clientData).length > 0) {
+        if (updateClientGroup !== false) {
+          await storage.updateTransactionsByGroupId(current.groupId, clientData);
+        } else {
+          Object.assign(updateData, clientData);
+        }
+      }
+
+      const hasClientData = Object.keys(clientData).length > 0;
+      const hasTransactionData = Object.keys(updateData).length > 0;
+      if (!hasTransactionData && !hasClientData) {
+        return res.status(400).json({ message: "Nenhuma alteração informada" });
+      }
+
+      const updated = hasTransactionData
+        ? await storage.updateTransaction(id, updateData)
+        : await storage.getTransactionById(id);
       if (!updated) {
         return res.status(404).json({ message: "Transação não encontrada" });
       }
@@ -342,6 +429,74 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error updating transaction:", error);
       res.status(500).json({ message: "Falha ao atualizar transação" });
+    }
+  });
+
+  app.post("/api/backups/reconcile", requireAdmin, async (req, res) => {
+    try {
+      const rows = req.body?.rows;
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return res.status(400).json({ message: "A planilha não possui linhas válidas" });
+      }
+      if (rows.length > 10000) {
+        return res.status(400).json({ message: "A planilha não pode ter mais de 10.000 linhas" });
+      }
+
+      const backups = (await storage.getTransactions()).filter(
+        (transaction) => transaction.category === "DATABASE_BACKUP",
+      );
+      const results = {
+        processed: 0,
+        updated: 0,
+        alreadyPaid: 0,
+        ignored: 0,
+        notFound: [] as string[],
+        invalid: [] as string[],
+      };
+
+      for (let index = 0; index < rows.length; index++) {
+        const row = rows[index];
+        const cnpj = normalizeDocument(row?.cnpj);
+        const monthYear = parseMonthYear(row?.monthYear);
+        if (cnpj.length !== 14 || !monthYear) {
+          results.invalid.push(`Linha ${index + 2}`);
+          continue;
+        }
+        if (row?.paid !== true) {
+          results.ignored += 1;
+          continue;
+        }
+
+        results.processed += 1;
+        const matches = backups.filter((transaction) => {
+          const transactionCnpj = normalizeDocument(transaction.clientCpfCnpj);
+          const dueDate = new Date(transaction.dueDate);
+          return (
+            transactionCnpj === cnpj &&
+            dueDate.getMonth() + 1 === monthYear.month &&
+            dueDate.getFullYear() === monthYear.year
+          );
+        });
+
+        if (matches.length === 0) {
+          results.notFound.push(`${cnpj} — ${String(monthYear.month).padStart(2, "0")}/${monthYear.year}`);
+          continue;
+        }
+
+        for (const transaction of matches) {
+          if (transaction.status === "PAID") {
+            results.alreadyPaid += 1;
+          } else {
+            await storage.updateTransactionStatus(transaction.id, "PAID");
+            results.updated += 1;
+          }
+        }
+      }
+
+      return res.json(results);
+    } catch (error: any) {
+      console.error("Error reconciling backups:", error);
+      return res.status(500).json({ message: error?.message || "Falha ao conciliar pagamentos" });
     }
   });
 
@@ -462,6 +617,50 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Error generating collection preview:", error);
       res.status(500).json({ message: error?.message || "Falha ao gerar cobrança" });
+    }
+  });
+
+  app.get("/api/config", requireAdmin, (_req, res) => {
+    res.json({
+      whatsappConfigured: isWhatsAppConfigured(),
+      asaasConfigured: isAsaasConfigured(),
+    });
+  });
+
+  app.post("/api/send-whatsapp", requireAdmin, async (req, res) => {
+    try {
+      const { transactionId } = req.body;
+      if (!transactionId) {
+        return res.status(400).json({ message: "transactionId é obrigatório" });
+      }
+
+      const transaction = await storage.getTransactionById(transactionId);
+      if (!transaction) {
+        return res.status(404).json({ message: "Transação não encontrada" });
+      }
+      if (transaction.category === "DATABASE_BACKUP") {
+        return res.status(400).json({ message: "Backups não geram cobrança" });
+      }
+      if (transaction.status !== "OVERDUE") {
+        return res.status(400).json({ message: "Cobrança disponível apenas para parcelas em atraso" });
+      }
+
+      const result = await resolvePixForTransaction(transaction);
+      if (!result.phone) {
+        return res.status(400).json({ message: "Nenhum telefone disponível para este cliente" });
+      }
+
+      await sendWhatsAppText(result.phone, result.message);
+
+      res.json({
+        message: "WhatsApp enviado com sucesso",
+        adjustment: result.adjustment,
+        pixIncluded: Boolean(result.pixCode),
+        pixError: result.pixError,
+      });
+    } catch (error: any) {
+      console.error("Error sending WhatsApp:", error);
+      res.status(500).json({ message: error.message || "Falha ao enviar WhatsApp" });
     }
   });
 

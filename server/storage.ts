@@ -17,6 +17,8 @@ export interface IStorage {
   createTransaction(transaction: InsertTransaction): Promise<Transaction>;
   createManyTransactions(txns: InsertTransaction[]): Promise<Transaction[]>;
   updateTransactionStatus(id: string, status: string): Promise<Transaction | undefined>;
+  updateTransaction(id: string, data: Partial<InsertTransaction>): Promise<Transaction | undefined>;
+  updateTransactionsByGroupId(groupId: string, data: Partial<InsertTransaction>): Promise<void>;
   updateTransactionAsaasChargeId(id: string, chargeId: string): Promise<void>;
   updateOverdueTransactions(): Promise<void>;
   getDistinctGroups(): Promise<{ groupId: string; description: string; client: string }[]>;
@@ -76,6 +78,25 @@ export class DatabaseStorage implements IStorage {
       .where(eq(transactions.id, id))
       .returning();
     return result;
+  }
+
+  async updateTransaction(
+    id: string,
+    data: Partial<InsertTransaction>,
+  ): Promise<Transaction | undefined> {
+    const [result] = await db
+      .update(transactions)
+      .set(data)
+      .where(eq(transactions.id, id))
+      .returning();
+    return result;
+  }
+
+  async updateTransactionsByGroupId(
+    groupId: string,
+    data: Partial<InsertTransaction>,
+  ): Promise<void> {
+    await db.update(transactions).set(data).where(eq(transactions.groupId, groupId));
   }
 
   async updateTransactionAsaasChargeId(id: string, chargeId: string): Promise<void> {

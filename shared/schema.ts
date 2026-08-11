@@ -72,6 +72,14 @@ export const createProjectSchema = z.object({
   lateFee: z.number().min(0).max(100).optional(),
   earlyDiscount: z.number().min(0).max(100).optional(),
   earlyDiscountDays: z.number().int().min(0).max(60).optional(),
+}).superRefine((data, ctx) => {
+  if (data.category === "DATABASE_BACKUP" && !data.clientCpfCnpj?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["clientCpfCnpj"],
+      message: "CNPJ é obrigatório para backups",
+    });
+  }
 });
 
 export const createUserSchema = z.object({

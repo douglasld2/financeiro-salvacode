@@ -247,7 +247,9 @@ export function CreateTransactionDialog({
                 name="description"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Descrição</FormLabel>
+                    <FormLabel>
+                      {isBackup ? "Identificação do backup / empresa atendida" : "Descrição"}
+                    </FormLabel>
                     <FormControl>
                       <Input
                         placeholder={isBackup ? "Ex: Backup Banco Cliente X" : "Ex: Site Institucional, Plano Pro..."}
@@ -268,7 +270,7 @@ export function CreateTransactionDialog({
                     <FormLabel>{isBackup ? "Cliente / Empresa pagadora" : "Cliente"}</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder={isBackup ? "Nome do cliente ou empresa que paga" : "Nome do cliente"}
+                        placeholder={isBackup ? "Ex: OSPREY (empresa principal)" : "Nome do cliente"}
                         {...field}
                         data-testid="input-client"
                       />
@@ -326,25 +328,28 @@ export function CreateTransactionDialog({
                     />
                   </div>
 
-                  <FormField
-                    control={form.control}
-                    name="clientCpfCnpj"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>CPF / CNPJ (necessário para PIX via Asaas)</FormLabel>
-                        <FormControl>
-                          <Input
-                            placeholder="000.000.000-00 ou 00.000.000/0000-00"
-                            {...field}
-                            data-testid="input-client-cpf-cnpj"
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
                 </>
               )}
+
+              <FormField
+                control={form.control}
+                name="clientCpfCnpj"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {isBackup ? "CNPJ da empresa atendida" : "CPF / CNPJ (necessário para PIX via Asaas)"}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder={isBackup ? "00.000.000/0000-00" : "000.000.000-00 ou 00.000.000/0000-00"}
+                        {...field}
+                        data-testid="input-client-cpf-cnpj"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
               <FormField
                 control={form.control}

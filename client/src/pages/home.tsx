@@ -8,9 +8,10 @@ import { DashboardCards } from "@/components/dashboard-cards";
 import { TransactionAccordion } from "@/components/transaction-accordion";
 import { SaasRenewals } from "@/components/saas-renewals";
 import { CreateTransactionDialog } from "@/components/create-transaction-dialog";
+import { BackupReconciliationDialog } from "@/components/backup-reconciliation-dialog";
 import { useTheme } from "@/components/theme-provider";
 import { useAuth } from "@/hooks/use-auth";
-import { Plus, Moon, Sun, Receipt, Users, LogOut, Database } from "lucide-react";
+import { Plus, Moon, Sun, Receipt, Users, LogOut, Database, Upload } from "lucide-react";
 import type { Transaction } from "@shared/schema";
 
 interface SafeUser {
@@ -26,6 +27,7 @@ interface SafeUser {
 export default function Home() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [backupDialogOpen, setBackupDialogOpen] = useState(false);
+  const [reconciliationOpen, setReconciliationOpen] = useState(false);
   const { theme, toggleTheme } = useTheme();
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
@@ -53,6 +55,13 @@ export default function Home() {
 
   const billable = transactions.filter((t) => t.category !== "DATABASE_BACKUP");
   const backups = transactions.filter((t) => t.category === "DATABASE_BACKUP");
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+  const visibleBackups = backups.filter((t) => {
+    if (t.status === "OVERDUE") return true;
+    const due = new Date(t.dueDate);
+    return t.status === "PENDING" && due.getMonth() === currentMonth && due.getFullYear() === currentYear;
+  });
 
   const next30Days = billable.filter((t) => {
     const due = new Date(t.dueDate);
@@ -173,9 +182,9 @@ export default function Home() {
                     <TabsTrigger value="backups" data-testid="tab-backups">
                       <Database className="h-3.5 w-3.5 mr-1" />
                       Backups
-                      {backups.length > 0 && (
+                      {visibleBackups.length > 0 && (
                         <span className="ml-1.5 text-[11px] bg-purple-500/15 text-purple-400 px-1.5 py-0.5 rounded-sm">
-                          {backups.length}
+                          {visibleBackups.length}
                         </span>
                       )}
                     </TabsTrigger>
@@ -213,7 +222,16 @@ export default function Home() {
 
                   <TabsContent value="backups">
                     <div className="flex justify-end mb-3">
-                      <Button
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setReconciliationOpen(true)}
+                          data-testid="button-reconcile-backups"
+                        >
+                          <Upload className="h-4 w-4 mr-1.5" />
+                          Conciliar Excel
+                        </Button>
+                        <Button
                         size="sm"
                         variant="outline"
                         onClick={() => setBackupDialogOpen(true)}
@@ -231,8 +249,9 @@ export default function Home() {
                       </div>
                     ) : (
                       <TransactionAccordion
-                        transactions={backups}
+                        transactions={visibleBackups}
                         allTransactions={backups}
+                        groupingTransactions={backups}
                         hideCollection
                       />
                     )}
@@ -254,6 +273,7 @@ export default function Home() {
         onOpenChange={setBackupDialogOpen}
         defaultCategory="DATABASE_BACKUP"
       />
+      <BackupReconciliationDialog open={reconciliationOpen} onOpenChange={setReconciliationOpen} />
     </div>
   );
 }

@@ -105,6 +105,17 @@ shared/
 - Backups are excluded from Projetos / A Receber / Em Atraso tabs and from KPI cards (they're paid automatically by a third party — no collection needed)
 - Collection buttons (WhatsApp/Email/Pagar) are hidden on backup rows; "Pagar" becomes "Recebido"
 - API blocks collection-preview and send-collection-email for DATABASE_BACKUP with 400 "Backups não geram cobrança"
+- For backups, `client` is the primary paying/service-provider company (e.g. OSPREY), while `clientCpfCnpj` identifies the end company receiving the backup. One payer can contain multiple backup groups, each with its own CNPJ.
+- The Backups tab shows only overdue items and pending items due in the current month; future installments stay hidden.
+
+## WhatsApp API (Meta Cloud API)
+- `server/whatsapp.ts`: envia mensagem de texto via Meta Graph API v19.0
+- Requer secrets: `WHATSAPP_TOKEN` (token permanente do sistema) e `WHATSAPP_PHONE_NUMBER_ID` (ID do número no Meta Business)
+- `GET /api/config` (admin): retorna `{ whatsappConfigured, asaasConfigured }` — frontend usa para decidir o comportamento do botão
+- `POST /api/send-whatsapp` (admin): valida parcela em atraso → chama `resolvePixForTransaction` → envia mensagem diretamente via API
+- Normalização do número: adiciona prefixo `55` (Brasil) se ausente; a Meta API aceita E.164
+- Frontend: quando `whatsappConfigured=true`, o botão no diálogo de cobrança muda de "Abrir WhatsApp" para "Enviar Agora" (envia direto sem abrir app); quando `false`, mantém comportamento anterior de redirect `wa.me`
+- Para ativar: criar secrets `WHATSAPP_TOKEN` e `WHATSAPP_PHONE_NUMBER_ID` no Replit (dev) e no Google Secret Manager como `SF_WHATSAPP_TOKEN` / `SF_WHATSAPP_PHONE_NUMBER_ID` (prod)
 
 ## Recent Changes
 - 2026-02-06: Initial implementation of full MVP

@@ -29,11 +29,14 @@ import {
   Mail,
   MessageCircle,
   Copy,
+  Send,
+  Pencil,
 } from "lucide-react";
 import type { Transaction } from "@shared/schema";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { EditTransactionDialog } from "@/components/edit-transaction-dialog";
 
 interface UserContact {
   email: string | null;
@@ -44,6 +47,7 @@ interface UserContact {
 interface TransactionAccordionProps {
   transactions: Transaction[];
   allTransactions?: Transaction[];
+  groupingTransactions?: Transaction[];
   usersByGroupId?: Record<string, UserContact>;
   readOnly?: boolean;
   hideCollection?: boolean;
@@ -60,6 +64,7 @@ interface ProjectGroup {
   groupId: string;
   description: string;
   category: string;
+  clientCpfCnpj: string | null;
   transactions: Transaction[];
   totalAmount: number;
   paidAmount: number;
@@ -67,11 +72,16 @@ interface ProjectGroup {
   totalCount: number;
 }
 
-function groupTransactions(transactions: Transaction[], allTransactions?: Transaction[]): ClientGroup[] {
+function groupTransactions(
+  transactions: Transaction[],
+  allTransactions?: Transaction[],
+  groupingTransactions?: Transaction[],
+): ClientGroup[] {
   const clientMap = new Map<string, Map<string, Transaction[]>>();
   const allTxns = allTransactions || transactions;
+  const groupsSource = groupingTransactions || transactions;
 
-  for (const t of transactions) {
+  for (const t of groupsSource) {
     if (!clientMap.has(t.client)) {
       clientMap.set(t.client, new Map());
     }
@@ -79,7 +89,10 @@ function groupTransactions(transactions: Transaction[], allTransactions?: Transa
     if (!projectMap.has(t.groupId)) {
       projectMap.set(t.groupId, []);
     }
-    projectMap.get(t.groupId)!.push(t);
+    const visibleTransactions = transactions.filter((visible) => visible.id === t.id);
+    if (visibleTransactions.length > 0) {
+      projectMap.get(t.groupId)!.push(...visibleTransactions);
+    }
   }
 
   const groups: ClientGroup[] = [];
@@ -92,6 +105,8 @@ function groupTransactions(transactions: Transaction[], allTransactions?: Transa
     projectMap.forEach((txns: Transaction[], groupId: string) => {
       const projectAllTxns = allTxns.filter((t) => t.groupId === groupId);
       const sorted = txns.sort((a, b) => a.installmentCurrent - b.installmentCurrent);
+      const projectReference = sorted[0] || projectAllTxns[0];
+      if (!projectReference) return;
 
       const projectTotal = projectAllTxns.reduce((sum, t) => sum + parseFloat(t.amount), 0);
       const projectPaid = projectAllTxns
@@ -101,8 +116,9 @@ function groupTransactions(transactions: Transaction[], allTransactions?: Transa
 
       projects.push({
         groupId,
-        description: sorted[0].description,
-        category: sorted[0].category,
+        description: projectReference.description,
+        category: projectReference.category,
+        clientCpfCnpj: projectReference.clientCpfCnpj,
         transactions: sorted,
         totalAmount: projectTotal,
         paidAmount: projectPaid,
@@ -148,11 +164,13 @@ function InstallmentRow({
   userContact,
   readOnly = false,
   hideCollection = false,
+  whatsappConfigured = false,
 }: {
   transaction: Transaction;
   userContact?: UserContact;
   readOnly?: boolean;
   hideCollection?: boolean;
+  whatsappConfigured?: boolean;
 }) {
   const { toast } = useToast();
   const statusInfo = getStatusBadgeVariant(transaction.status, transaction.dueDate);
@@ -165,6 +183,7 @@ function InstallmentRow({
   const [previewOpen, setPreviewOpen] = useState(false);
   const [preview, setPreview] = useState<CollectionPreview | null>(null);
   const [previewChannel, setPreviewChannel] = useState<"email" | "whatsapp" | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
 
   const markPaid = useMutation({
     mutationFn: async () => {
@@ -200,6 +219,26 @@ function InstallmentRow({
     onError: (error: Error) => {
       toast({
         title: "Erro ao enviar email",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const sendWhatsAppDirect = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/send-whatsapp", { transactionId: transaction.id });
+    },
+    onSuccess: () => {
+      toast({
+        title: "WhatsApp enviado",
+        description: `Cobrança enviada direto para ${resolvedPhone}`,
+      });
+      setPreviewOpen(false);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Erro ao enviar WhatsApp",
         description: error.message,
         variant: "destructive",
       });
@@ -242,7 +281,7 @@ function InstallmentRow({
     }
   }
 
-  function confirmWhatsApp() {
+  function confirmWhatsAppRedirect() {
     if (!preview || !resolvedPhone) return;
     const phone = resolvedPhone.replace(/\D/g, "");
     window.open(
@@ -311,6 +350,17 @@ function InstallmentRow({
             data-testid={`button-email-${transaction.id}`}
           >
             <Mail className={`h-4 w-4 ${!resolvedEmail ? "text-muted-foreground/30" : "text-blue-400"}`} />
+          </Button>
+        )}
+        {!readOnly && (
+          <Button
+            size="icon"
+            variant="ghost"
+            title="Editar parcela"
+            onClick={() => setEditOpen(true)}
+            data-testid={`button-edit-transaction-${transaction.id}`}
+          >
+            <Pencil className="h-4 w-4 text-muted-foreground" />
           </Button>
         )}
         {!readOnly && transaction.status !== "PAID" && (
@@ -430,9 +480,28 @@ function InstallmentRow({
                   Cancelar
                 </Button>
                 {previewChannel === "whatsapp" ? (
-                  <Button className="flex-1" onClick={confirmWhatsApp} data-testid="button-confirm-whatsapp">
-                    Abrir WhatsApp
-                  </Button>
+                  <div className="flex flex-1 gap-2">
+                    {whatsappConfigured ? (
+                      <Button
+                        className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                        onClick={() => sendWhatsAppDirect.mutate()}
+                        disabled={sendWhatsAppDirect.isPending}
+                        data-testid="button-send-whatsapp-direct"
+                      >
+                        <Send className="h-3.5 w-3.5 mr-1.5" />
+                        {sendWhatsAppDirect.isPending ? "Enviando..." : "Enviar Agora"}
+                      </Button>
+                    ) : (
+                      <Button
+                        className="flex-1"
+                        onClick={confirmWhatsAppRedirect}
+                        data-testid="button-confirm-whatsapp"
+                      >
+                        <MessageCircle className="h-3.5 w-3.5 mr-1.5" />
+                        Abrir WhatsApp
+                      </Button>
+                    )}
+                  </div>
                 ) : (
                   <Button className="flex-1" onClick={confirmEmail} disabled={sendEmail.isPending} data-testid="button-confirm-email">
                     {sendEmail.isPending ? "Enviando..." : "Enviar Email"}
@@ -443,6 +512,7 @@ function InstallmentRow({
           )}
         </DialogContent>
       </Dialog>
+      <EditTransactionDialog transaction={transaction} open={editOpen} onOpenChange={setEditOpen} />
     </div>
   );
 }
@@ -450,11 +520,19 @@ function InstallmentRow({
 export function TransactionAccordion({
   transactions,
   allTransactions,
+  groupingTransactions,
   usersByGroupId,
   readOnly = false,
   hideCollection = false,
 }: TransactionAccordionProps) {
-  const groups = groupTransactions(transactions, allTransactions);
+  const groups = groupTransactions(transactions, allTransactions, groupingTransactions);
+
+  const { data: config } = useQuery<{ whatsappConfigured: boolean; asaasConfigured: boolean }>({
+    queryKey: ["/api/config"],
+    enabled: !readOnly && !hideCollection,
+    staleTime: 60_000,
+  });
+  const whatsappConfigured = config?.whatsappConfigured ?? false;
 
   if (groups.length === 0) {
     return (
@@ -526,6 +604,11 @@ export function TransactionAccordion({
                             {getCategoryLabel(project.category)}
                           </Badge>
                         </div>
+                        {project.clientCpfCnpj && (
+                          <p className="text-xs text-primary/80 mt-1">
+                            Empresa atendida · CNPJ: {project.clientCpfCnpj}
+                          </p>
+                        )}
                         <p className="text-xs text-muted-foreground mt-0.5">
                           {project.paidCount} de {project.totalCount} parcela(s)
                           paga(s) &middot; {formatBRL(project.paidAmount)} de{" "}
@@ -539,15 +622,22 @@ export function TransactionAccordion({
                       data-testid={`progress-${project.groupId}`}
                     />
                     <div className="space-y-1.5">
-                      {project.transactions.map((txn) => (
-                        <InstallmentRow
-                          key={txn.id}
-                          transaction={txn}
-                          userContact={userContact}
-                          readOnly={readOnly}
-                          hideCollection={hideCollection}
-                        />
-                      ))}
+                      {project.transactions.length > 0 ? (
+                        project.transactions.map((txn) => (
+                          <InstallmentRow
+                            key={txn.id}
+                            transaction={txn}
+                            userContact={userContact}
+                            readOnly={readOnly}
+                            hideCollection={hideCollection}
+                            whatsappConfigured={whatsappConfigured}
+                          />
+                        ))
+                      ) : (
+                        <p className="rounded-md bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                          Nenhuma parcela a receber neste mês ou em atraso.
+                        </p>
+                      )}
                     </div>
                   </div>
                 );
